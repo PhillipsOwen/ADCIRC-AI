@@ -207,3 +207,4 @@ marimo/_lsp/
 __marimo__/
 /gdelt_results.csv
 /themes/
+/data/
