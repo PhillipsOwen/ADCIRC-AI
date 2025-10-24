@@ -23,12 +23,15 @@ INDEX_PATH = "numeric_rag.index"
 DOCS_PATH = "numeric_docs.parquet"
 
 # configure from env params
-endpoint = os.getenv("ENDPOINT_URL", "")
-deployment = os.getenv("DEPLOYMENT_NAME", "")
-subscription_key = os.getenv("AZURE_OPENAI_API_KEY", "")
+endpoint = os.getenv('ENDPOINT_URL', '')
+deployment = os.getenv('DEPLOYMENT_NAME', '')
+subscription_key = os.getenv('AZURE_OPENAI_API_KEY', '')
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
+device = 'cpu'
 print(f"Using device: {device}")
+
+print(faiss.__version__)
 
 def get_time_series_data() -> pd.DataFrame:
     """
@@ -49,8 +52,6 @@ def get_time_series_data() -> pd.DataFrame:
         print('No data found to process.')
         sys.exit(-1)
 
-
-
 def row_to_doc(row: pd.Series) -> str:
     """
     convert rows to text docs for embedding
@@ -60,7 +61,6 @@ def row_to_doc(row: pd.Series) -> str:
     """
     # keep text concise but include numeric fields and metadata
     return f"Water level observations for station {row.station} located in {row.location} on {row.datetime} was {row.Observations} ft. datetime: {row.datetime} | station: {row.station} | location: {row.location} | metric: {row.metric} | Observations: {row['Observations']} | latitude: {row['latitude']} | longitude: {row['longitude']}"
-
 
 class NumericRAGIndex:
     """
@@ -240,43 +240,50 @@ if __name__ == '__main__':
     """
         entry point
     """
-    # load the station time-series data
-    df = get_time_series_data()
-
-    # build index
     idx = NumericRAGIndex()
-    idx.build(df)
 
-    # optional, if you want to save and reload it later
-    # idx.save()
+    if os.path.exists(INDEX_PATH) and os.path.exists(DOCS_PATH):
+        print('Loading saved index...')
+        idx.load(DOCS_PATH, DOCS_PATH)
+    else:
+        print('Building/creating/saving index...')
+
+        # load the station time-series data
+        df = get_time_series_data()
+
+        # build the index
+        idx.build(df)
+
+        # optional, if you want to save and reload it later
+        idx.save()
 
     # example questions humans might ask about station data
     prompts = [
         "what is the latitude and longitude of the Frying Pan Shoals location?",
-        "What's the average water level in the last 3 days for the Frying Pan Shoals location?",
-        "Is there an increasing trend over the last 3 days for the Frying Pan Shoals location?",
-        "What were the top 3 highest values and their dates for the Frying Pan Shoals location?",
-        "what is the station name for the Frying Pan Shoals location?",
+        # "What's the average water level in the last 3 days for the Frying Pan Shoals location?",
+        # "Is there an increasing trend over the last 3 days for the Frying Pan Shoals location?",
+        # "What were the top 3 highest values and their dates for the Frying Pan Shoals location?",
+        # "what is the station name for the Frying Pan Shoals location?",
 
         # "What's the average water level in the last 3 days for station 41013?",
         # "Is there an increasing trend over the last 3 days for station 41013?",
         # "What were the top 3 highest values and their dates for station 41013?",
 
-        "what is the latitude and longitude of the Lockwoods Folly River location?",
-        "What's the average water level in the last 3 days for the Lockwoods Folly River location?",
-        "Is there an increasing trend over the last 3 days for the Lockwoods Folly River location?",
-        "What were the top 3 highest Nowcast values and their dates for the Lockwoods Folly River location?",
-        "what is the station name for the Lockwoods Folly River location?",
+        # "what is the latitude and longitude of the Lockwoods Folly River location?",
+        # "What's the average water level in the last 3 days for the Lockwoods Folly River location?",
+        # "Is there an increasing trend over the last 3 days for the Lockwoods Folly River location?",
+        # "What were the top 3 highest Nowcast values and their dates for the Lockwoods Folly River location?",
+        # "what is the station name for the Lockwoods Folly River location?",
 
         # "What's the average water level in the last 3 days for station 30001?",
         # "Is there an increasing trend over the last 3 days for station 30001?",
         # "What were the top 3 highest values and their dates for station 30001?",
-
-        "what is the latitude and longitude of the Marcus Hook location?",
-        "What's the average water level in the last 3 days for the Marcus Hook location?",
-        "Is there an increasing trend over the last 3 days for the Marcus Hook location?",
-        "What were the top 3 highest Nowcast values and their dates for the Marcus Hook location?",
-        "what is the station name for the Marcus Hook location?",
+        #
+        # "what is the latitude and longitude of the Marcus Hook location?",
+        # "What's the average water level in the last 3 days for the Marcus Hook location?",
+        # "Is there an increasing trend over the last 3 days for the Marcus Hook location?",
+        # "What were the top 3 highest Nowcast values and their dates for the Marcus Hook location?",
+        # "what is the station name for the Marcus Hook location?",
     ]
 
     # output the result for each prompt
