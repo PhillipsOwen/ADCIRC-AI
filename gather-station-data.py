@@ -56,7 +56,7 @@ def get_time_series_data():
     # WHERE station_name IN ('30001', '41013')
     sql = """
           SELECT json_agg(row_to_json(t))
-          FROM (SELECT DISTINCT station_name, location_name, lat, lon FROM drf_gauge_station ORDER BY station_name) t; 
+          FROM (SELECT DISTINCT station_name, location_name, lat, lon FROM drf_gauge_station WHERE station_name IN ('30001', '41013') ORDER BY station_name) t; 
           """
 
     # get the station data
@@ -73,7 +73,7 @@ def get_time_series_data():
     # get the info for each station from the UI data web service
     for station in station_data:
         # create the URL to the web service
-        api_url = f"{data_url}{station['station_name']}&time_mark=2025-10-14T12%3A00%3A00Z&data_source=GFSFORECAST_NCSCV2.0&instance_name=NCSCv2.0_gfs&forcing_metclass=synoptic"
+        api_url = f"{data_url}{station['station_name']}&time_mark=2025-10-23T12%3A00%3A00Z&data_source=GFSFORECAST_NCSCV2.0&instance_name=NCSCv2.0_gfs&forcing_metclass=synoptic"
 
         # get the station data
         response = requests.get(api_url, headers=headers)
@@ -87,6 +87,9 @@ def get_time_series_data():
             if 'Observations' in df.columns:
                 # drop records with no observation data
                 df.dropna(subset=['Observations'], inplace=True)
+
+                # convert meters to feet
+                df['Observations'] = df['Observations'].apply(lambda x: x*3.2808399)
 
                 for col in ['APS Nowcast','Difference (APS-OBS)','APS Forecast','NOAA Tidal Predictions']:
                     # if the column exists
