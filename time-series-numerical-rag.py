@@ -1,5 +1,5 @@
 """
-Numerical RAG example using APZViz time-series station data.
+Numerical RAG example using APSViz time-series station data.
 
 """
 import sys
@@ -13,25 +13,29 @@ from os.path import exists
 from sentence_transformers import SentenceTransformer
 from typing import List, Dict, Any
 from openai import AzureOpenAI
+from argparse import ArgumentParser
 
 # ---------------------------
 # configuration parameters
 # ---------------------------
 EMBED_MODEL = "all-MiniLM-L6-v2"
 EMBED_DIM = 384
+
+# INDEX_PATH = "data/water-level/numeric_rag.index"
+# DOCS_PATH = "data/water-level/numeric_docs.parquet"
+
 INDEX_PATH = "numeric_rag.index"
 DOCS_PATH = "numeric_docs.parquet"
 
+llm_model_name = "gpt-4o-mini"
+
 # configure from env params
-endpoint = os.getenv('ENDPOINT_URL', '')
-deployment = os.getenv('DEPLOYMENT_NAME', '')
+VLLM_BASE_URL = os.getenv('ENDPOINT_URL', '')
 subscription_key = os.getenv('AZURE_OPENAI_API_KEY', '')
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
-device = 'cpu'
 print(f"Using device: {device}")
-
-print(faiss.__version__)
+# print('faiss version:', faiss.__version__)
 
 def get_time_series_data() -> pd.DataFrame:
     """
@@ -39,7 +43,7 @@ def get_time_series_data() -> pd.DataFrame:
 
     :return:
     """
-    # use the save datafile if it exists
+    # use the saved datafile if it exists
     if exists('all_station_data.csv'):
         print('Gathering station data over time from data file.')
 
@@ -59,8 +63,14 @@ def row_to_doc(row: pd.Series) -> str:
     :param row:
     :return:
     """
+
     # keep text concise but include numeric fields and metadata
-    return f"Water level observations for station {row.station} located in {row.location} on {row.datetime} was {row.Observations} ft. datetime: {row.datetime} | station: {row.station} | location: {row.location} | metric: {row.metric} | Observations: {row['Observations']} | latitude: {row['latitude']} | longitude: {row['longitude']}"
+    return (f"Water level observations for station {row.station} located in {row.location} on {row.datetime} was {row.Observations}. datetime: {row.datetime} | station: {row.station} | location: {row.location} | "
+            f"metric: {row.metric} | Observations: {row['Observations']} | latitude: {row['latitude']} | longitude: {row['longitude']} | "
+            f"nos minor flooding level: {row['nos_minor']} | nos moderate flooding level: {row['nos_moderate']} | nos major flooding level: {row['nos_major']} | "
+            f"nws minor flooding level: {row['nws_minor']} | nws moderate flooding level: {row['nws_moderate']} | nws major flooding level: {row['nws_major']}")
+
+    # return f"station {row.station} located in {row.location} on {row.datetime}. datetime: {row.datetime} | station: {row.station} | location: {row.location} | latitude: {row['latitude']} | longitude: {row['longitude']}"
 
 class NumericRAGIndex:
     """
@@ -75,9 +85,16 @@ class NumericRAGIndex:
         :param embed_model_name:
         :param embed_dim:
         """
+        # create a sentence embedder
         self.embedder = SentenceTransformer(embed_model_name, device=device)
+
+        # get the dimension of the embedding
         self.dim = embed_dim
+
+        # create a vector DB
         self.index = faiss.IndexFlatL2(self.dim)
+
+        # init storage for the metadata
         self.metadata: List[Dict[str, Any]] = []
 
     def build(self, df_target: pd.DataFrame):
@@ -87,18 +104,27 @@ class NumericRAGIndex:
         :param df_target:
         :return:
         """
+        # serialize all the textual data
         docs = [row_to_doc(r) for _, r in df_target.iterrows()]
 
+        # create vector embeddings
         vectors = self.embedder.encode(docs, show_progress_bar=True, convert_to_numpy=True)
 
+        # make sure we created the vectors
         assert vectors.shape[1] == self.dim
 
+        # add the vectors
         self.index.add(vectors)
 
-        # keep metadata aligned with index positions
+        # align indexes positions and augment metadata
         self.metadata = [
             dict(datetime=str(r.datetime), Observations=float(str(r['Observations'])), station=r.station,
-                 location=r.location, metric=r.metric, text=docs[i])
+                 location=r.location, metric=r.metric,
+                 nos_minor=r.nos_minor, nos_moderate=r.nos_moderate, nos_major=r.nos_major,
+                 nws_minor=r.nws_minor, nws_moderate=r.nws_moderate, nws_major=r.nws_major,
+                 flood_level=get_flood_stage(r), total_rows=df_target[df_target['location']==r.location].shape[0],
+                 text=docs[i])
+
             for i, (_, r) in enumerate(df_target.iterrows())]
 
     def save(self, index_path=INDEX_PATH, meta_path=DOCS_PATH):
@@ -109,7 +135,10 @@ class NumericRAGIndex:
         :param meta_path:
         :return:
         """
+        # backup the vectors
         faiss.write_index(self.index, index_path)
+
+        # backup the meta data
         pd.DataFrame(self.metadata).to_parquet(meta_path, index=False)
 
     def load(self, index_path=INDEX_PATH, meta_path=DOCS_PATH):
@@ -120,7 +149,10 @@ class NumericRAGIndex:
         :param meta_path:
         :return:
         """
+        # load the vectors
         self.index = faiss.read_index(index_path)
+
+        # load the metadata
         self.metadata = pd.read_parquet(meta_path).to_dict(orient='records')
 
     def query(self, q: str, top_k: int = 5) -> List[Dict[str, Any]]:
@@ -138,18 +170,59 @@ class NumericRAGIndex:
         # init the return
         results = []
 
+        # init a record counter for score to record alignment
+        counter = 0
+
         # for each index
         for idx in I[0]:
             # is this is not a valid index
             if idx < 0 or idx >= len(self.metadata):
                 continue
 
-            # else save the result
+            # add in the score
+            self.metadata[idx]['score'] = float(D[0][counter])
+
+            # save the result
             results.append(self.metadata[idx])
+
+            # increment the score value counter
+            counter += 1
+
+        # sort the list by date
+        results = sorted(results, key=lambda x: x['datetime'] )
 
         # return the results
         return results
 
+def get_flood_stage(values):
+    """
+    Uses the current water level of a station and
+    gets the flood level based on the station thresholds
+
+    """
+    # init the return value
+    ret_val = 'no flooding'
+
+    if ((values['nos_major'] and values['nos_major'] - values['Observations'] < 0) or (
+            values['nws_major'] and values['nws_major'] - values['Observations'] < 0)):
+        ret_val = 'major flooding'
+    elif ((values['nos_moderate'] and values['nos_moderate'] - values['Observations'] < 0) or (
+            values['nws_moderate'] and values['nws_moderate'] - values['Observations'] < 0)):
+        ret_val = 'moderate flooding'
+    elif ((values['nos_minor'] and values['nos_minor'] - values['Observations'] < 0) or (
+            values['nws_minor'] and values['nws_minor'] - values['Observations'] < 0)):
+        ret_val = 'minor flooding'
+
+    # print('\nStation:', values['name'], 'current_height:', values['Observations'])
+    # print('values[nos_major]', values['nos_major'] - values['Observations'])
+    # print('values[nos_moderate]', values['nos_moderate'] - values['Observations'])
+    # print('values[nos_minor]', values['nos_minor'] - values['Observations'])
+    # print('values[nws_major]', values['nws_major'] - values['Observations'])
+    # print('values[nws_moderate]', values['nws_moderate'] - values['Observations'])
+    # print('values[nws_minor]', values['nws_minor'] - values['Observations'])
+    # print('ret_val', ret_val)
+
+    return ret_val
 
 def compute_from_retrieved(retrieved_data: List[Dict[str, Any]], question: str) -> Dict[str, Any]:
     """
@@ -211,21 +284,21 @@ def llm_explain(computed_info: Dict[str, Any], question: str, provenance: List[D
 
     # get the handle to the UNC Azure foundry LLM
     client = AzureOpenAI(
-        azure_endpoint=endpoint,
+        azure_endpoint=VLLM_BASE_URL,
         api_key=subscription_key,
         api_version="2025-01-01-preview",
     )
 
     # build a concise prompt containing the computed facts and the provenance snippets.
-    prov_text = "\n".join([p["text"] for p in provenance[:25]])
+    prov_text = "\n".join([p["text"] for p in provenance])
 
     # create a prompt for the output
     prompt = (
-        "You are a data analyst. Only use the numeric values provided. Do NOT invent or round."
+        "You are a data analyst. Only use the numeric values provided. Do NOT invent or round. Return nothing if there is no supporting data."
         f"Prompt: {question}\n"
         f"Verified numeric result: {computed_info}\n"
         f"Relevant data rows:\n{prov_text}\n"
-        "Please write a short, clear answer that uses the computed facts and cites the date(s) from the data above."
+        "Please write a short, clear answer that uses the computed facts, cites, date(s) with latitude and longitude from the data above."
     )
 
     # get the response in a human readable format
@@ -240,11 +313,27 @@ if __name__ == '__main__':
     """
         entry point
     """
+    # create a command line parser
+    parser = ArgumentParser()
+
+    # add an argument for the LLM model
+    parser.add_argument('--modelname', action='store', dest='modelname', default='gpt-4o-mini',
+                        help='Select the Azure model name. The default is gpt-4o-mini')
+
+    # get the args
+    args = parser.parse_args()
+
+    # assign the LLM name
+    llm_model_name = args.modelname
+
+    # create the vector index
     idx = NumericRAGIndex()
 
+    # load the vector indexes and metadata
     if os.path.exists(INDEX_PATH) and os.path.exists(DOCS_PATH):
         print('Loading saved index...')
-        idx.load(DOCS_PATH, DOCS_PATH)
+        idx.load(INDEX_PATH, DOCS_PATH)
+    # else load from scratch
     else:
         print('Building/creating/saving index...')
 
@@ -259,7 +348,16 @@ if __name__ == '__main__':
 
     # example questions humans might ask about station data
     prompts = [
-        "what is the latitude and longitude of the Frying Pan Shoals location?",
+        # "Should Fort Pulaski be evacuated?",
+        "what is the latitude and longitude of the Eastport location?",
+
+        "what is the latitude and longitude of the Marcus Hook location?",
+        "What's the average water level in the last 3 days for the Marcus Hook location?",
+        "Is there an increasing trend over the last 3 days for the Marcus Hook location?",
+        "What were the top 3 highest Nowcast values and their dates for the Marcus Hook location?",
+        "what is the station name for the Marcus Hook location?",
+
+        # "what is the latitude and longitude of the Frying Pan Shoals location?",
         # "What's the average water level in the last 3 days for the Frying Pan Shoals location?",
         # "Is there an increasing trend over the last 3 days for the Frying Pan Shoals location?",
         # "What were the top 3 highest values and their dates for the Frying Pan Shoals location?",
@@ -278,29 +376,27 @@ if __name__ == '__main__':
         # "What's the average water level in the last 3 days for station 30001?",
         # "Is there an increasing trend over the last 3 days for station 30001?",
         # "What were the top 3 highest values and their dates for station 30001?",
-        #
-        # "what is the latitude and longitude of the Marcus Hook location?",
-        # "What's the average water level in the last 3 days for the Marcus Hook location?",
-        # "Is there an increasing trend over the last 3 days for the Marcus Hook location?",
-        # "What were the top 3 highest Nowcast values and their dates for the Marcus Hook location?",
-        # "what is the station name for the Marcus Hook location?",
     ]
 
     # output the result for each prompt
     for p in prompts:
         # get the data
-        retrieved = idx.query(p, top_k=25)
+        retrieved = idx.query(p, top_k=477)
 
         # compute the retrieved results
         computed = compute_from_retrieved(retrieved, p)
 
         # call the LLM using the computed facts for a human-friendly writeup
         explanation = llm_explain(computed["computed"], p, retrieved)
+        # explanation = llm_explain(None, p, retrieved)
 
-        print("\nPrompt:", p)
+        print(f"\nUsing the {llm_model_name} LLM.")
+        print("Prompt:", p)
         print("Computed:", computed["computed"])
 
+        # if there was a response output it
         if explanation.get("text"):
             print("LLM Answer:\n", explanation["text"])
+        # alert the user of no response for this prompt
         else:
             print("No LLM output.\n")
