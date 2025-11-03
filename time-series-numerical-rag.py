@@ -21,11 +21,11 @@ from argparse import ArgumentParser
 EMBED_MODEL = "all-MiniLM-L6-v2"
 EMBED_DIM = 384
 
-# INDEX_PATH = "data/water-level/FlatIP/numeric_rag.index"
-# DOCS_PATH = "data/water-level/FlatIP/numeric_docs.parquet"
+# INDEX_PATH = "data/water-level/FlatIP/numeric_rag_IP.index"
+# DOCS_PATH = "data/water-level/FlatIP/numeric_docs_IP.parquet"
 
-INDEX_PATH = "data/water-level/FlatL2/numeric_rag.index"
-DOCS_PATH = "data/water-level/FlatL2/numeric_docs.parquet"
+INDEX_PATH = "data/water-level/FlatL2/numeric_rag_L2.index"
+DOCS_PATH = "data/water-level/FlatL2/numeric_docs_L2.parquet"
 
 # INDEX_PATH = "numeric_rag.index"
 # DOCS_PATH = "numeric_docs.parquet"
@@ -38,6 +38,7 @@ subscription_key = os.getenv('AZURE_OPENAI_API_KEY', '')
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 print(f"Using device: {device}")
+
 # print('faiss version:', faiss.__version__)
 
 def get_time_series_data() -> pd.DataFrame:
@@ -48,7 +49,7 @@ def get_time_series_data() -> pd.DataFrame:
     """
     # use the saved datafile if it exists
     if exists('all_station_data.csv'):
-        print('Gathering station data over time from data file.')
+        print('Gathering station data over time from data file...')
 
         # read the CSV file with station time-series data
         df_final = pd.read_csv('all_station_data.csv', header='infer', sep=',')
@@ -56,7 +57,7 @@ def get_time_series_data() -> pd.DataFrame:
         # return the data
         return df_final
     else:
-        print('No data found to process.')
+        print('No data found to process. Exiting.')
         sys.exit(-1)
 
 def row_to_doc(row: pd.Series) -> str:
@@ -93,8 +94,8 @@ class NumericRAGIndex:
         self.dim = embed_dim
 
         # create a vector DB
-        self.index = faiss.IndexFlatL2(self.dim)
-        # self.index = faiss.IndexFlatIP(self.dim)
+        # self.index = faiss.IndexFlatL2(self.dim)
+        self.index = faiss.IndexFlatIP(self.dim)
 
         # init storage for the metadata
         self.metadata: List[Dict[str, Any]] = []
@@ -109,14 +110,18 @@ class NumericRAGIndex:
         # serialize all the textual data
         docs = [row_to_doc(r) for _, r in df_target.iterrows()]
 
+        print('Embedding vectors...')
+
         # create vector embeddings
-        vectors = self.embedder.encode(docs, show_progress_bar=True, convert_to_numpy=True) # , normalize_embeddings=True
+        vectors = self.embedder.encode(docs, show_progress_bar=True, convert_to_numpy=True) # Note that FlatIP DBs require normalize_embeddings=True
 
         # make sure we created the vectors
         assert vectors.shape[1] == self.dim
 
         # add the vectors
         self.index.add(vectors)
+
+        print('Creating aligned metadata...')
 
         # align indexes positions and augment metadata
         self.metadata = [
@@ -129,6 +134,8 @@ class NumericRAGIndex:
 
             for i, (_, r) in enumerate(df_target.iterrows())]
 
+        print('Vector DB and metadata build complete.')
+
     def save(self, index_path=INDEX_PATH, meta_path=DOCS_PATH):
         """
         Saves the index to disk
@@ -137,11 +144,17 @@ class NumericRAGIndex:
         :param meta_path:
         :return:
         """
+        print(f'Saving vector index data into {index_path}...')
+
         # backup the vectors
         faiss.write_index(self.index, index_path)
 
+        print(f'Saving metadata into {meta_path}...')
+
         # backup the meta data
         pd.DataFrame(self.metadata).to_parquet(meta_path, index=False)
+
+        print('Backups complete.')
 
     def load(self, index_path=INDEX_PATH, meta_path=DOCS_PATH):
         """
@@ -151,11 +164,17 @@ class NumericRAGIndex:
         :param meta_path:
         :return:
         """
+        print(f'Loading vector index data from {index_path}...')
+
         # load the vectors
         self.index = faiss.read_index(index_path)
 
+        print(f'Loading metadata from {meta_path}...')
+
         # load the metadata
         self.metadata = pd.read_parquet(meta_path).to_dict(orient='records')
+
+        print('Vector index and metadata loaded.')
 
     def query(self, q: str, top_k: int = 5) -> List[Dict[str, Any]]:
         """
@@ -165,6 +184,8 @@ class NumericRAGIndex:
         :param top_k:
         :return:
         """
+        print('Gathering vectors...')
+
         # embed the query and return top_k metadata entries
         q_vec = self.embedder.encode([q], convert_to_numpy=True)
         D, I = self.index.search(q_vec, top_k)
@@ -175,7 +196,9 @@ class NumericRAGIndex:
         # init a record counter for score to record alignment
         counter = 0
 
-        # for each index
+        print('Collecting and formatting results...')
+
+        # collect results for each index
         for idx in I[0]:
             # is this is not a valid index
             if idx < 0 or idx >= len(self.metadata):
@@ -244,8 +267,8 @@ def compute_from_retrieved(retrieved_data: List[Dict[str, Any]], question: str) 
     if "average" in question.lower() or "mean" in question.lower():
         output["computed"] = {"mean": float(df["Observations"].mean())}
     elif "max" in question.lower() or "highest" in question.lower():
-        idx = df["Observations"].idxmax()
-        output["computed"] = {"max": float(df.loc[idx, "Observations"]), "datetime": df.loc[idx, "datetime"]}
+        _idx = df["Observations"].idxmax()
+        output["computed"] = {"max": float(df.loc[_idx, "Observations"]), "datetime": df.loc[_idx, "datetime"]}
     elif "trend" in question.lower() or "increasing" in question.lower():
         # simple linear fit to check trend
         vals = df["Observations"].astype(float).values
@@ -288,7 +311,7 @@ def llm_explain(computed_info: Dict[str, Any], question: str, provenance: List[D
     client = AzureOpenAI(
         azure_endpoint=VLLM_BASE_URL,
         api_key=subscription_key,
-        api_version="2025-01-01-preview",
+        api_version="latest",
     )
 
     # build a concise prompt containing the computed facts and the provenance snippets.
@@ -329,53 +352,55 @@ if __name__ == '__main__':
     llm_model_name = args.modelname
 
     # create the vector index
-    idx = NumericRAGIndex()
+    numeric_rag_index = NumericRAGIndex()
 
     # load the vector indexes and metadata
     if os.path.exists(INDEX_PATH) and os.path.exists(DOCS_PATH):
-        print('Loading saved index...')
-        idx.load(INDEX_PATH, DOCS_PATH)
+        print('Loading saved index and metadata...')
+        numeric_rag_index.load(INDEX_PATH, DOCS_PATH)
     # else load from scratch
     else:
-        print('Building/creating/saving index...')
+        print('Building/creating/saving vector index DB and metadata...')
 
         # load the station time-series data
         df = get_time_series_data()
 
         # build the index
-        idx.build(df)
+        numeric_rag_index.build(df)
 
         # optional, if you want to save and reload it later
-        idx.save()
+        numeric_rag_index.save()
+
+    print(f"Showing results using the {llm_model_name} LLM.")
 
     # example questions humans might ask about station data
     prompts = [
-        "what is happening in Fort Pulaski?",
-        # "what is happening in Eastport",
-        # "Should Fort Pulaski be evacuated?",
-        # "what is the latitude and longitude of the Eastport station?",
+        "What is happening in Fort Pulaski?",
+        "What is happening in Eastport",
+        "Should Fort Pulaski be evacuated?",
+        "What is the latitude and longitude of the Eastport station?",
 
-        # "what is the latitude and longitude of the Marcus Hook location?",
+        # "What is the latitude and longitude of the Marcus Hook location?",
         # "What's the average water level in the last 3 days for the Marcus Hook location?",
         # "Is there an increasing trend over the last 3 days for the Marcus Hook location?",
         # "What were the top 3 highest Nowcast values and their dates for the Marcus Hook location?",
-        # "what is the station name for the Marcus Hook location?",
+        # "What is the station name for the Marcus Hook location?",
 
-        # "what is the latitude and longitude of the Frying Pan Shoals location?",
+        # "What is the latitude and longitude of the Frying Pan Shoals location?",
         # "What's the average water level in the last 3 days for the Frying Pan Shoals location?",
         # "Is there an increasing trend over the last 3 days for the Frying Pan Shoals location?",
         # "What were the top 3 highest values and their dates for the Frying Pan Shoals location?",
-        # "what is the station name for the Frying Pan Shoals location?",
+        # "What is the station name for the Frying Pan Shoals location?",
 
         # "What's the average water level in the last 3 days for station 41013?",
         # "Is there an increasing trend over the last 3 days for station 41013?",
         # "What were the top 3 highest values and their dates for station 41013?",
 
-        # "what is the latitude and longitude of the Lockwoods Folly River location?",
+        # "What is the latitude and longitude of the Lockwoods Folly River location?",
         # "What's the average water level in the last 3 days for the Lockwoods Folly River location?",
         # "Is there an increasing trend over the last 3 days for the Lockwoods Folly River location?",
         # "What were the top 3 highest Nowcast values and their dates for the Lockwoods Folly River location?",
-        # "what is the station name for the Lockwoods Folly River location?",
+        # "What is the station name for the Lockwoods Folly River location?",
 
         # "What's the average water level in the last 3 days for station 30001?",
         # "Is there an increasing trend over the last 3 days for station 30001?",
@@ -384,23 +409,22 @@ if __name__ == '__main__':
 
     # output the result for each prompt
     for p in prompts:
+        print("\nPrompt:", p)
+
         # get the data
-        retrieved = idx.query(p, top_k=1000)
+        retrieved = numeric_rag_index.query(p, top_k=100)
 
         # compute the retrieved results
         computed = compute_from_retrieved(retrieved, p)
 
         # call the LLM using the computed facts for a human-friendly writeup
         explanation = llm_explain(computed["computed"], p, retrieved)
-        # explanation = llm_explain(None, p, retrieved)
 
-        print(f"\nUsing the {llm_model_name} LLM.")
-        print("Prompt:", p)
-        print("Computed:", computed["computed"])
+        print("Computed results:", computed["computed"])
 
         # if there was a response output it
         if explanation.get("text"):
-            print("LLM Answer:\n", explanation["text"])
+            print(f"LLM Answer:\n{explanation['text']}")
         # alert the user of no response for this prompt
         else:
             print("No LLM output.\n")

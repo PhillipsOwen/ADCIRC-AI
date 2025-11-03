@@ -30,8 +30,8 @@ print(f"Using device: {device}")
 # ---------------------------
 EMBED_MODEL = "all-MiniLM-L6-v2"
 EMBED_DIM = 384
-INDEX_PATH = "numeric_rag.index"
-DOCS_PATH = "numeric_docs.parquet"
+INDEX_PATH = "../data/water-level/FlatL2/numeric_rag.index"
+DOCS_PATH = "../data/water-level/FlatL2/numeric_docs.parquet"
 
 # configure from env params
 endpoint = os.getenv("ENDPOINT_URL", "")
@@ -48,7 +48,7 @@ def get_time_series_data() -> pd.DataFrame:
         print('Gathering station data over time from data file.')
 
         # read the CSV file with station time-series data
-        df_final = pd.read_csv('all_station_data.csv', header='infer', sep=',')
+        df_final = pd.read_csv('../all_station_data.csv', header='infer', sep=',')
 
         # return the data
         return df_final

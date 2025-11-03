@@ -208,3 +208,6 @@ __marimo__/
 /gdelt_results.csv
 /themes/
 /data/
+/all_station_data.csv
+/env_params.sh
+/old/
