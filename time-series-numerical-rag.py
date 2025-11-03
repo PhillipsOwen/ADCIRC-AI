@@ -21,11 +21,14 @@ from argparse import ArgumentParser
 EMBED_MODEL = "all-MiniLM-L6-v2"
 EMBED_DIM = 384
 
-# INDEX_PATH = "data/water-level/numeric_rag.index"
-# DOCS_PATH = "data/water-level/numeric_docs.parquet"
+# INDEX_PATH = "data/water-level/FlatIP/numeric_rag.index"
+# DOCS_PATH = "data/water-level/FlatIP/numeric_docs.parquet"
 
-INDEX_PATH = "numeric_rag.index"
-DOCS_PATH = "numeric_docs.parquet"
+INDEX_PATH = "data/water-level/FlatL2/numeric_rag.index"
+DOCS_PATH = "data/water-level/FlatL2/numeric_docs.parquet"
+
+# INDEX_PATH = "numeric_rag.index"
+# DOCS_PATH = "numeric_docs.parquet"
 
 llm_model_name = "gpt-4o-mini"
 
@@ -58,7 +61,7 @@ def get_time_series_data() -> pd.DataFrame:
 
 def row_to_doc(row: pd.Series) -> str:
     """
-    convert rows to text docs for embedding
+    convert row to a block of text of metadata to embed
 
     :param row:
     :return:
@@ -70,11 +73,9 @@ def row_to_doc(row: pd.Series) -> str:
             f"nos minor flooding level: {row['nos_minor']} | nos moderate flooding level: {row['nos_moderate']} | nos major flooding level: {row['nos_major']} | "
             f"nws minor flooding level: {row['nws_minor']} | nws moderate flooding level: {row['nws_moderate']} | nws major flooding level: {row['nws_major']}")
 
-    # return f"station {row.station} located in {row.location} on {row.datetime}. datetime: {row.datetime} | station: {row.station} | location: {row.location} | latitude: {row['latitude']} | longitude: {row['longitude']}"
-
 class NumericRAGIndex:
     """
-    Class to build embeddings and the FAISS index
+    Class to build, search, backup and restore the FAISS vector index and metadata
 
     """
 
@@ -93,6 +94,7 @@ class NumericRAGIndex:
 
         # create a vector DB
         self.index = faiss.IndexFlatL2(self.dim)
+        # self.index = faiss.IndexFlatIP(self.dim)
 
         # init storage for the metadata
         self.metadata: List[Dict[str, Any]] = []
@@ -108,7 +110,7 @@ class NumericRAGIndex:
         docs = [row_to_doc(r) for _, r in df_target.iterrows()]
 
         # create vector embeddings
-        vectors = self.embedder.encode(docs, show_progress_bar=True, convert_to_numpy=True)
+        vectors = self.embedder.encode(docs, show_progress_bar=True, convert_to_numpy=True) # , normalize_embeddings=True
 
         # make sure we created the vectors
         assert vectors.shape[1] == self.dim
@@ -189,7 +191,7 @@ class NumericRAGIndex:
             counter += 1
 
         # sort the list by date
-        results = sorted(results, key=lambda x: x['datetime'] )
+        # results = sorted(results, key=lambda x: x['score'] )
 
         # return the results
         return results
@@ -263,8 +265,8 @@ def compute_from_retrieved(retrieved_data: List[Dict[str, Any]], question: str) 
         # default: return basic stats
         output["computed"] = {
             "Record count": int(df.shape[0]),
-            "Observation mean": float(df["Observations"].mean()),
-            "Observation std": float(df["Observations"].std()),
+            # "Observation mean": float(df["Observations"].mean()),
+            # "Observation std": float(df["Observations"].std()),
             "Observation min": float(df["Observations"].min()),
             "Observation max": float(df["Observations"].max())
         }
@@ -294,7 +296,7 @@ def llm_explain(computed_info: Dict[str, Any], question: str, provenance: List[D
 
     # create a prompt for the output
     prompt = (
-        "You are a data analyst. Only use the numeric values provided. Do NOT invent or round. Return nothing if there is no supporting data."
+        "You are a data analyst. Only use the numeric values provided. Do NOT invent or round. Return nothing if there is no supporting data.\n"
         f"Prompt: {question}\n"
         f"Verified numeric result: {computed_info}\n"
         f"Relevant data rows:\n{prov_text}\n"
@@ -302,7 +304,7 @@ def llm_explain(computed_info: Dict[str, Any], question: str, provenance: List[D
     )
 
     # get the response in a human readable format
-    resp = client.chat.completions.create(model="gpt-4o-mini", messages=[{"role": "user", "content": prompt}],
+    resp = client.chat.completions.create(model=llm_model_name, messages=[{"role": "user", "content": prompt}],
                                           max_tokens=1000, temperature=0.7, top_p=0.9, n=1, stream=False)
 
     # return the human friendly looking result
@@ -348,14 +350,16 @@ if __name__ == '__main__':
 
     # example questions humans might ask about station data
     prompts = [
+        "what is happening in Fort Pulaski?",
+        # "what is happening in Eastport",
         # "Should Fort Pulaski be evacuated?",
-        "what is the latitude and longitude of the Eastport location?",
+        # "what is the latitude and longitude of the Eastport station?",
 
-        "what is the latitude and longitude of the Marcus Hook location?",
-        "What's the average water level in the last 3 days for the Marcus Hook location?",
-        "Is there an increasing trend over the last 3 days for the Marcus Hook location?",
-        "What were the top 3 highest Nowcast values and their dates for the Marcus Hook location?",
-        "what is the station name for the Marcus Hook location?",
+        # "what is the latitude and longitude of the Marcus Hook location?",
+        # "What's the average water level in the last 3 days for the Marcus Hook location?",
+        # "Is there an increasing trend over the last 3 days for the Marcus Hook location?",
+        # "What were the top 3 highest Nowcast values and their dates for the Marcus Hook location?",
+        # "what is the station name for the Marcus Hook location?",
 
         # "what is the latitude and longitude of the Frying Pan Shoals location?",
         # "What's the average water level in the last 3 days for the Frying Pan Shoals location?",
@@ -381,7 +385,7 @@ if __name__ == '__main__':
     # output the result for each prompt
     for p in prompts:
         # get the data
-        retrieved = idx.query(p, top_k=477)
+        retrieved = idx.query(p, top_k=1000)
 
         # compute the retrieved results
         computed = compute_from_retrieved(retrieved, p)
