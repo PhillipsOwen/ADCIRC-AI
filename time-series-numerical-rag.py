@@ -27,6 +27,9 @@ EMBED_DIM = 384
 INDEX_PATH = "data/water-level/FlatL2/numeric_rag_L2.index"
 DOCS_PATH = "data/water-level/FlatL2/numeric_docs_L2.parquet"
 
+# INDEX_PATH = "data/water-level/FlatL2/numeric_rag_L2_Normal.index"
+# DOCS_PATH = "data/water-level/FlatL2/numeric_docs_L2_Normal.parquet"
+
 # INDEX_PATH = "numeric_rag.index"
 # DOCS_PATH = "numeric_docs.parquet"
 
@@ -67,7 +70,6 @@ def row_to_doc(row: pd.Series) -> str:
     :param row:
     :return:
     """
-
     # keep text concise but include numeric fields and metadata
     return (f"Water level observations for station {row.station} located in {row.location} on {row.datetime} was {row.Observations}. datetime: {row.datetime} | station: {row.station} | location: {row.location} | "
             f"metric: {row.metric} | Observations: {row['Observations']} | latitude: {row['latitude']} | longitude: {row['longitude']} | "
@@ -94,8 +96,8 @@ class NumericRAGIndex:
         self.dim = embed_dim
 
         # create a vector DB
-        # self.index = faiss.IndexFlatL2(self.dim)
-        self.index = faiss.IndexFlatIP(self.dim)
+        self.index = faiss.IndexFlatL2(self.dim)
+        # self.index = faiss.IndexFlatIP(self.dim)
 
         # init storage for the metadata
         self.metadata: List[Dict[str, Any]] = []
@@ -375,10 +377,11 @@ if __name__ == '__main__':
 
     # example questions humans might ask about station data
     prompts = [
-        "What is happening in Fort Pulaski?",
-        "What is happening in Eastport",
-        "Should Fort Pulaski be evacuated?",
-        "What is the latitude and longitude of the Eastport station?",
+        "Mona island",
+        # "What is happening in Fort Pulaski?",
+        # "What is happening in Eastport",
+        # "Should Fort Pulaski be evacuated?",
+        # "What is the latitude and longitude of the Eastport station?",
 
         # "What is the latitude and longitude of the Marcus Hook location?",
         # "What's the average water level in the last 3 days for the Marcus Hook location?",
